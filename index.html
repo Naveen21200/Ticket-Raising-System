@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ticket Portal</title>
+<style>
+  :root{--bg:#f4f6fb;--card:#fff;--text:#1d2433;--muted:#6b7280;--primary:#4f46e5;--border:#e5e7eb}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+  header{background:var(--primary);color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
+  header h1{font-size:18px;margin:0}
+  main{max-width:860px;margin:28px auto;padding:0 16px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:20px}
+  h2{margin:0 0 14px;font-size:18px}
+  label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
+  input,textarea,select{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font:inherit}
+  input:focus,textarea:focus,select:focus{outline:2px solid #c7d2fe;border-color:var(--primary)}
+  button{background:var(--primary);color:#fff;border:0;border-radius:8px;padding:10px 18px;font:inherit;cursor:pointer;margin-top:16px}
+  button.ghost{background:transparent;color:var(--primary);border:1px solid var(--primary);margin-top:0}
+  header button{margin:0;background:#fff;color:var(--primary)}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  .msg{padding:10px 12px;border-radius:8px;margin-top:14px;font-size:14px;display:none}
+  .msg.err{background:#fee2e2;color:#991b1b;display:block}
+  .msg.ok{background:#dcfce7;color:#166534;display:block}
+  .row{display:flex;gap:12px}.row>*{flex:1}
+  .hidden{display:none}
+  .ticket{border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:12px}
+  .ticket .top{display:flex;justify-content:space-between;gap:8px;align-items:center}
+  .ticket p{margin:8px 0;color:var(--muted);white-space:pre-wrap}
+  .badge{font-size:12px;padding:2px 8px;border-radius:99px;background:#eef2ff;color:var(--primary);margin-right:6px}
+  .HIGH{background:#fee2e2;color:#b91c1c}.MEDIUM{background:#fef3c7;color:#92400e}.LOW{background:#dcfce7;color:#166534}
+  .ticket select{width:auto;padding:4px 8px}
+  .muted{color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<header><h1>🎫 Ticket Portal</h1><button id="logoutBtn" class="hidden" onclick="logout()">Logout</button></header>
+<main>
+
+  <!-- Step 1: email -->
+  <section id="stepEmail" class="card">
+    <h2>Sign in with your email</h2>
+    <label>Name</label><input id="name" placeholder="Your name">
+    <label>Email</label><input id="email" type="email" placeholder="you@example.com">
+    <button id="sendBtn" onclick="sendOtp()">Send OTP</button>
+    <div id="msg1" class="msg"></div>
+  </section>
+
+  <!-- Step 2: OTP -->
+  <section id="stepOtp" class="card hidden">
+    <h2>Enter the 6-digit OTP</h2>
+    <p class="muted" id="otpHint"></p>
+    <input id="otp" inputmode="numeric" maxlength="6" placeholder="••••••">
+    <div class="row" style="align-items:center">
+      <button id="verifyBtn" onclick="verifyOtp()">Verify</button>
+      <button class="ghost" onclick="backToEmail()">Change email</button>
+    </div>
+    <div id="msg2" class="msg"></div>
+  </section>
+
+  <!-- Dashboard -->
+  <section id="dash" class="hidden">
+    <div class="card">
+      <h2>Raise a ticket</h2>
+      <label>Title</label><input id="title" maxlength="150" placeholder="Short summary">
+      <label>Description</label><textarea id="desc" rows="4" maxlength="2000" placeholder="Describe the issue"></textarea>
+      <label>Priority</label>
+      <select id="priority"><option>LOW</option><option selected>MEDIUM</option><option>HIGH</option></select>
+      <button onclick="createTicket()">Submit ticket</button>
+      <div id="msg3" class="msg"></div>
+    </div>
+    <div class="card">
+      <h2>My tickets</h2>
+      <div id="list"><p class="muted">Loading…</p></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let token = sessionStorage.getItem('token');
+
+function show(el, text, ok) { el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'err'); }
+function hide(el) { el.className = 'msg'; }
+
+async function api(path, method = 'GET', body) {
+  const res = await fetch('/api' + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && token) { logout(); throw new Error(data.error || 'Session expired'); }
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+async function sendOtp() {
+  const email = $('email').value.trim(), name = $('name').value.trim();
+  if (!email) return show($('msg1'), 'Enter your email', false);
+  $('sendBtn').disabled = true; hide($('msg1'));
+  try {
+    await api('/auth/send-otp', 'POST', { email, name });
+    $('otpHint').textContent = 'We sent a code to ' + email + '. It expires in 5 minutes.';
+    $('stepEmail').classList.add('hidden'); $('stepOtp').classList.remove('hidden'); $('otp').focus();
+  } catch (e) { show($('msg1'), e.message, false); }
+  $('sendBtn').disabled = false;
+}
+
+function backToEmail() { $('stepOtp').classList.add('hidden'); $('stepEmail').classList.remove('hidden'); hide($('msg2')); }
+
+async function verifyOtp() {
+  $('verifyBtn').disabled = true; hide($('msg2'));
+  try {
+    const d = await api('/auth/verify-otp', 'POST', { email: $('email').value.trim(), otp: $('otp').value.trim() });
+    token = d.token; sessionStorage.setItem('token', token);
+    openDash();
+  } catch (e) { show($('msg2'), e.message, false); }
+  $('verifyBtn').disabled = false;
+}
+
+function openDash() {
+  $('stepEmail').classList.add('hidden'); $('stepOtp').classList.add('hidden');
+  $('dash').classList.remove('hidden'); $('logoutBtn').classList.remove('hidden');
+  loadTickets();
+}
+
+async function logout() {
+  try { if (token) await fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + token } }); } catch (_) {}
+  token = null; sessionStorage.removeItem('token');
+  $('dash').classList.add('hidden'); $('logoutBtn').classList.add('hidden');
+  $('otp').value = ''; $('stepEmail').classList.remove('hidden');
+}
+
+async function createTicket() {
+  hide($('msg3'));
+  try {
+    const t = await api('/tickets', 'POST', { title: $('title').value, description: $('desc').value, priority: $('priority').value });
+    show($('msg3'), 'Ticket ' + t.ticketNo + ' created. A confirmation email has been sent.', true);
+    $('title').value = ''; $('desc').value = '';
+    loadTickets();
+  } catch (e) { show($('msg3'), e.message, false); }
+}
+
+async function loadTickets() {
+  try {
+    const list = await api('/tickets');
+    $('list').innerHTML = list.length ? list.map(t => `
+      <div class="ticket">
+        <div class="top">
+          <div><strong>${esc(t.ticketNo)}</strong> — ${esc(t.title)}</div>
+          <div><span class="badge ${t.priority}">${t.priority}</span></div>
+        </div>
+        <p>${esc(t.description)}</p>
+        <div class="top">
+          <span class="muted">${new Date(t.createdAt).toLocaleString()}</span>
+          <select onchange="setStatus(${t.id}, this.value)">
+            ${['OPEN','IN_PROGRESS','RESOLVED','CLOSED'].map(s => `<option ${s === t.status ? 'selected' : ''}>${s}</option>`).join('')}
+          </select>
+        </div>
+      </div>`).join('') : '<p class="muted">No tickets yet.</p>';
+  } catch (e) { $('list').innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; }
+}
+
+async function setStatus(id, status) {
+  try { await api('/tickets/' + id + '/status', 'PATCH', { status }); }
+  catch (e) { show($('msg3'), e.message, false); loadTickets(); }
+}
+
+if (token) openDash();
+</script>
+</body>
+</html>
